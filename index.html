@@ -9,6 +9,9 @@
 <meta name="apple-mobile-web-app-title" content="GymTracker">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-192.png">
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 <title>Gym Tracker</title>
 <style>
 :root {
@@ -525,6 +528,71 @@ const ICONS = {
 };
 const ICON_KEYS = Object.keys(ICONS);
 
+// ── Firebase Setup ───────────────────────────────────────────────
+// TODO: Replace with your Firebase project config from Firebase Console
+const firebaseConfig = {
+  apiKey: "AIzaSyCBXzfka44GGrcCIjWBMTLrupQh3I7bUiE",
+  authDomain: "gym-tracker-790ef.firebaseapp.com",
+  databaseURL: "https://gym-tracker-790ef-default-rtdb.firebaseio.com",
+  projectId: "gym-tracker-790ef",
+  storageBucket: "gym-tracker-790ef.firebasestorage.app",
+  messagingSenderId: "280831513131",
+  appId: "1:280831513131:web:88f050397d5e685ffb906e",
+  measurementId: "G-TPE9GJ5XZE"
+};
+
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db = firebase.database();
+let fbUid = null;
+let fbReady = false;
+
+function userRef(path) {
+  return db.ref('users/' + fbUid + '/' + path);
+}
+
+function syncToFirebase(key, data) {
+  if (!fbReady || !fbUid) return;
+  userRef(key).set(data).catch(err => console.warn('Firebase write failed:', err));
+}
+
+function loadFromFirebase() {
+  if (!fbUid) return;
+  userRef('equipment').once('value').then(snap => {
+    const val = snap.val();
+    if (val && Array.isArray(val)) {
+      localStorage.setItem('gym-equipment', JSON.stringify(val));
+    }
+    return userRef('sessions').once('value');
+  }).then(snap => {
+    const val = snap.val();
+    if (val && Array.isArray(val)) {
+      localStorage.setItem('gym-sessions', JSON.stringify(val));
+    }
+    return userRef('unit').once('value');
+  }).then(snap => {
+    const val = snap.val();
+    if (val) localStorage.setItem('gym-unit', val);
+  }).then(() => {
+    fbReady = true;
+    seedIfEmpty();
+    switchTab(currentTab);
+    showToast('Data synced from cloud');
+  }).catch(err => {
+    console.warn('Firebase read failed:', err);
+    fbReady = true;
+  });
+}
+
+// Sign in anonymously
+auth.signInAnonymously().catch(err => console.warn('Auth failed:', err));
+auth.onAuthStateChanged(user => {
+  if (user) {
+    fbUid = user.uid;
+    loadFromFirebase();
+  }
+});
+
 // ── Data Layer ───────────────────────────────────────────────────
 const ROTATION = ['push', 'pull', 'leg', 'back'];
 const DAY_LABELS = { push: 'Push', pull: 'Pull', leg: 'Leg', back: 'Back' };
@@ -536,11 +604,11 @@ function loadData(key, fallback) {
 function saveData(key, data) { localStorage.setItem(key, JSON.stringify(data)); }
 
 function getEquipment() { return loadData('gym-equipment', []); }
-function setEquipment(arr) { saveData('gym-equipment', arr); }
+function setEquipment(arr) { saveData('gym-equipment', arr); syncToFirebase('equipment', arr); }
 function getSessions() { return loadData('gym-sessions', []); }
-function setSessions(arr) { saveData('gym-sessions', arr); }
+function setSessions(arr) { saveData('gym-sessions', arr); syncToFirebase('sessions', arr); }
 function getUnit() { return localStorage.getItem('gym-unit') || 'kg'; }
-function setUnit(u) { localStorage.setItem('gym-unit', u); }
+function setUnit(u) { localStorage.setItem('gym-unit', u); syncToFirebase('unit', u); }
 
 function getNextDay() {
   const sessions = getSessions();
@@ -1178,6 +1246,11 @@ function clearAllData() {
   if (!confirm('Are you really sure?')) return;
   localStorage.removeItem('gym-equipment');
   localStorage.removeItem('gym-sessions');
+  if (fbReady && fbUid) {
+    userRef('equipment').remove();
+    userRef('sessions').remove();
+    userRef('unit').remove();
+  }
   currentWorkout = null;
   seedIfEmpty();
   switchTab(currentTab);
