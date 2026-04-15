@@ -650,7 +650,10 @@ function renderWorkout() {
     return `<div class="exercise-card">
       <div class="exercise-card-header">
         <div class="exercise-icon">${iconHtml}</div>
-        <span class="exercise-name">${escHtml(eq.name)}</span>
+        <div style="flex:1;min-width:0">
+          <span class="exercise-name" style="display:block">${escHtml(eq.name)}</span>
+          ${(() => { const pm = getPrevMax(eq.id); return pm ? `<span style="font-size:12px;color:var(--text-muted)">Prev Max: ${pm.weight} ${pm.unit}</span>` : ''; })()}
+        </div>
         <button class="add-set-btn" onclick="toggleSetForm(${ei})">+ Set</button>
       </div>
       ${setsHtml ? `<div class="set-list">${setsHtml}</div>` : ''}
@@ -674,6 +677,21 @@ function renderWorkout() {
       </div>
     </div>`;
   }).join('');
+}
+
+function getPrevMax(equipmentId) {
+  const sessions = getSessions();
+  let max = null;
+  sessions.forEach(s => {
+    s.exercises.forEach(ex => {
+      if (ex.equipmentId === equipmentId) {
+        ex.sets.forEach(st => {
+          if (max === null || st.weight > max.weight) max = { weight: st.weight, unit: st.unit };
+        });
+      }
+    });
+  });
+  return max;
 }
 
 function getLastWeight(ex) {
