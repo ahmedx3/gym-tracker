@@ -552,8 +552,38 @@ function userRef(path) {
 }
 
 function syncToFirebase(key, data) {
+  if (!fbReady || !fbUid) { queuePendingWrite(key, data); return; }
+  userRef(key).set(data).catch(err => {
+    console.warn('Firebase write failed:', err);
+    queuePendingWrite(key, data);
+  });
+}
+
+// ── Offline Write Queue ──────────────────────────────────────────
+function getPendingWrites() {
+  try { return JSON.parse(localStorage.getItem('gym-pending-writes')) || []; }
+  catch { return []; }
+}
+function savePendingWrites(arr) { localStorage.setItem('gym-pending-writes', JSON.stringify(arr)); }
+
+function queuePendingWrite(key, data) {
+  const q = getPendingWrites();
+  const idx = q.findIndex(w => w.key === key);
+  if (idx !== -1) q[idx] = { key, data }; else q.push({ key, data });
+  savePendingWrites(q);
+}
+
+function flushPendingWrites() {
   if (!fbReady || !fbUid) return;
-  userRef(key).set(data).catch(err => console.warn('Firebase write failed:', err));
+  const q = getPendingWrites();
+  if (!q.length) return;
+  savePendingWrites([]);
+  q.forEach(w => {
+    userRef(w.key).set(w.data).catch(err => {
+      console.warn('Flush write failed:', err);
+      queuePendingWrite(w.key, w.data);
+    });
+  });
 }
 
 function loadFromFirebase() {
@@ -576,7 +606,9 @@ function loadFromFirebase() {
   }).then(() => {
     fbReady = true;
     seedIfEmpty();
+    currentWorkout = loadCurrentWorkout();
     switchTab(currentTab);
+    flushPendingWrites();
     showToast('Data synced from cloud');
   }).catch(err => {
     console.warn('Firebase read failed:', err);
@@ -609,6 +641,14 @@ function getSessions() { return loadData('gym-sessions', []); }
 function setSessions(arr) { saveData('gym-sessions', arr); syncToFirebase('sessions', arr); }
 function getUnit() { return localStorage.getItem('gym-unit') || 'kg'; }
 function setUnit(u) { localStorage.setItem('gym-unit', u); syncToFirebase('unit', u); }
+
+// ── In-Progress Workout Persistence ──────────────────────────────
+function saveCurrentWorkout() {
+  if (currentWorkout) saveData('gym-current-workout', currentWorkout);
+  else localStorage.removeItem('gym-current-workout');
+}
+function loadCurrentWorkout() { return loadData('gym-current-workout', null); }
+function clearCurrentWorkout() { localStorage.removeItem('gym-current-workout'); }
 
 function getNextDay() {
   const sessions = getSessions();
@@ -679,6 +719,7 @@ function selectDay(day) {
     dayType: day,
     exercises: equips.map(e => ({ equipmentId: e.id, sets: [] }))
   };
+  saveCurrentWorkout();
   renderToday();
 }
 
@@ -687,6 +728,7 @@ function exitWorkout() {
     if (!confirm('Discard current workout?')) return;
   }
   currentWorkout = null;
+  clearCurrentWorkout();
   renderToday();
 }
 
@@ -789,11 +831,13 @@ function saveSet(ei) {
   const r = parseInt(document.getElementById('set-reps-' + ei).value);
   if (isNaN(w) || w < 0 || isNaN(r) || r < 1) { showToast('Enter valid weight and reps'); return; }
   currentWorkout.exercises[ei].sets.push({ weight: w, unit: getUnit(), reps: r });
+  saveCurrentWorkout();
   renderWorkout();
 }
 
 function deleteSet(ei, si) {
   currentWorkout.exercises[ei].sets.splice(si, 1);
+  saveCurrentWorkout();
   renderWorkout();
 }
 
@@ -813,6 +857,7 @@ function finishWorkout() {
   sessions.push(session);
   setSessions(sessions);
   currentWorkout = null;
+  clearCurrentWorkout();
 
   showToast('Workout saved! 💪');
   renderToday();
@@ -1288,7 +1333,14 @@ if ('serviceWorker' in navigator) {
 
 // ── Init ─────────────────────────────────────────────────────────
 seedIfEmpty();
+currentWorkout = loadCurrentWorkout();
 switchTab('today');
+
+// ── Persist & Sync Listeners ─────────────────────────────────────
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden' && currentWorkout) saveCurrentWorkout();
+});
+window.addEventListener('online', () => flushPendingWrites());
 
 // Close modals on overlay click
 document.querySelectorAll('.modal-overlay').forEach(overlay => {
